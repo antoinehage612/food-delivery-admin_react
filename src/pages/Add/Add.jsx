@@ -3,15 +3,25 @@ import axios from "axios";
 import { useState } from "react";
 import { assets } from "../../assets/assets";
 import { toast } from "react-toastify";
+import {
+  getDownloadURL,
+  getStorage,
+  ref,
+  uploadBytesResumable,
+} from "firebase/storage";
+import { app } from "../../firebase";
 
 const Add = ({ url }) => {
-  const [image, setImage] = useState(false);
+  const [image, setImage] = useState(null);
+  const [imageUrl, setImageUrl] = useState("");
   const [data, setData] = useState({
     name: "",
     description: "",
     price: "",
     category: "Salad",
   });
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState(null);
 
   const onChangeHandler = (event) => {
     const name = event.target.name;
@@ -19,27 +29,82 @@ const Add = ({ url }) => {
     setData((data) => ({ ...data, [name]: value }));
   };
 
+  const handleUploadImage = async (file) => {
+    if (!file) {
+      setUploadError("Please select an image");
+      return null;
+    }
+
+    setUploadError(null);
+    const storage = getStorage(app);
+    const fileName = new Date().getTime() + "-" + file.name;
+    const storageRef = ref(storage, fileName);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+
+    return new Promise((resolve, reject) => {
+      uploadTask.on(
+        "state_changed",
+        (snapshot) => {
+          const progress =
+            (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(progress.toFixed(0));
+        },
+        (error) => {
+          setUploadError("Image upload failed");
+          setUploadProgress(0);
+          reject(error);
+        },
+        () => {
+          getDownloadURL(uploadTask.snapshot.ref).then((downloadURL) => {
+            setUploadProgress(0);
+            setUploadError(null);
+            resolve(downloadURL);
+          });
+        }
+      );
+    });
+  };
+
+  const onImageChange = async (e) => {
+    const file = e.target.files[0];
+    setImage(file);
+
+    if (file) {
+      const uploadedImageUrl = await handleUploadImage(file);
+      setImageUrl(uploadedImageUrl);
+    }
+  };
+
   const onSubmitHandler = async (event) => {
     event.preventDefault();
-    const formData = new FormData();
-    formData.append("name", data.name);
-    formData.append("description", data.description);
-    formData.append("price", Number(data.price));
-    formData.append("category", data.category);
-    formData.append("image", image);
+    try {
+      if (!imageUrl) {
+        toast.error("Image upload failed");
+        return;
+      }
 
-    const response = await axios.post(`${url}/api/food/add`, formData);
-    if (response.data.success) {
-      setData({
-        name: "",
-        description: "",
-        price: "",
-        category: "Salad",
-      });
-      setImage(false);
-      toast.success(response.data.message);
-    } else {
-      toast.error(res.data.message);
+      const formData = {
+        ...data,
+        image: imageUrl,
+        price: Number(data.price),
+      };
+
+      const response = await axios.post(`${url}/api/food/add`, formData);
+      if (response.data.success) {
+        setData({
+          name: "",
+          description: "",
+          price: "",
+          category: "Salad",
+        });
+        setImage(null);
+        setImageUrl("");
+        toast.success(response.data.message);
+      } else {
+        toast.error(response.data.message);
+      }
+    } catch (error) {
+      toast.error("Something went wrong");
     }
   };
 
@@ -55,13 +120,14 @@ const Add = ({ url }) => {
             />
           </label>
           <input
-            onChange={(e) => setImage(e.target.files[0])}
+            onChange={onImageChange}
             type="file"
-            name=""
             id="image"
             hidden
             required
           />
+
+          {uploadError && <div className="error">{uploadError}</div>}
         </div>
         <div className="add-product-name flex-col">
           <p>Product name</p>
@@ -71,6 +137,7 @@ const Add = ({ url }) => {
             type="text"
             name="name"
             placeholder="Type here"
+            required
           />
         </div>
         <div className="add-product-description flex-col">
@@ -107,9 +174,10 @@ const Add = ({ url }) => {
             <input
               onChange={onChangeHandler}
               value={data.price}
-              type="Number"
+              type="number"
               name="price"
               placeholder="$20"
+              required
             />
           </div>
         </div>
